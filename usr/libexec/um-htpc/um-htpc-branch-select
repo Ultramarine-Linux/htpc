@@ -1,0 +1,12 @@
+#!/bin/bash
+# Branch script placeholder for Ultramarine HTPC
+
+# symlink this to /usr/libexec/os-branch-select
+
+# For now we just fetch /etc/os-release
+
+. /etc/os-release
+
+BRANCH="${VARIANT_ID:-$VARIANT}"
+
+echo "$BRANCH"

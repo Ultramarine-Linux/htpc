@@ -1,0 +1,262 @@
+#!/bin/bash
+# Ultramarine HTPC Session Selector script
+
+# This script is meant to be a drop-in for `steamos-session-select`, but with support
+# for Ultramarine HTPC.
+
+# To install, symlink this to `/usr/lib/os-session-select`
+# with the Terra gamescope-session package installed, (preferrably using `alternatives`)
+
+# This means:
+# - Support for multiple display managers:
+#   - GDM (current)
+#   - SDDM
+#   - LightDM
+# - More generic session management-ish?
+
+function log() {
+    if [ "$EUID" -eq 0 ]; then
+        echo "[ROOT] $*"
+    else
+        echo "[*] $*"
+    fi
+}
+
+LOGUSER="$(logname)"
+
+
+# parse cli flags: ignore unknown --flags; capture first non-flag as session arg
+# preserve original args for root re-run
+ORIG_ARGS=("$@")
+SESSION_ARG=""
+ENABLE_AUTOLOGIN=false
+log "arguments: ${ORIG_ARGS[*]}"
+# scan all args to find flags and the first positional
+for arg in "$@"; do
+    case "$arg" in
+        --enable-autologin)
+            ENABLE_AUTOLOGIN=true
+            ;;
+        --*)
+            # ignore other flags
+            log "Ignoring unknown flag: $arg"
+            ;;
+        *)
+            # capture first non-flag argument
+            if [[ -z "$SESSION_ARG" ]]; then
+                SESSION_ARG="$arg"
+            fi
+            ;;
+    esac
+done
+
+
+DM_SYMLINK="/etc/systemd/system/display-manager.service"
+
+function get_display_manager() {
+    if [ -L "$DM_SYMLINK" ]; then
+        local target="$(readlink -f "$DM_SYMLINK")"
+        local base="$(basename "$target")"
+        echo "${base%.service}"
+    else
+        echo "Unknown"
+    fi
+}
+
+function enable_autologin_gdm() {
+    GDM_CONFIG="/etc/gdm/custom.conf"
+    # FACT: Did you know that GDM can edit its own config file?
+    # running /usr/libexec/gdm-runtime-config will create a new drop-in override config.
+    # This is mostly used for dealing with Wayland incompatibility, but we will be (ab)using it to
+    # re-generate the GDM config file with our desired settings.
+
+    GDM_RUNTIME_CONFIG="/run/gdm/custom.conf"
+    function gdm-runtime-config() {
+        /usr/libexec/gdm-runtime-config "$@"
+    }
+
+    log "Found GDM config at $GDM_CONFIG, Copying as runtime config in $GDM_RUNTIME_CONFIG"
+    cp "$GDM_CONFIG" "$GDM_RUNTIME_CONFIG"
+    gdm-runtime-config set daemon TimedLoginEnable true
+    gdm-runtime-config set daemon TimedLoginDelay 3
+    log "Setting TimedLogin user to $UM_HTPC_USER"
+    gdm-runtime-config set daemon TimedLogin "$UM_HTPC_USER"
+
+    log "Saving runtime config as persistent at $GDM_CONFIG"
+    cp "$GDM_RUNTIME_CONFIG" "$GDM_CONFIG"
+
+    return 0
+}
+
+
+
+function enable_autologin_lightdm() {
+    LIGHTDM_CONFIG="/etc/lightdm/lightdm.conf.d/99-autologin.conf"
+    log "Found LightDM config at $LIGHTDM_CONFIG"
+
+    cat <<EOF > "$LIGHTDM_CONFIG"
+[SeatDefaults]
+autologin-user=$UM_HTPC_USER
+logind-check-graphical=true
+EOF
+
+    return 0
+}
+
+function enable_autologin_sddm() {
+    SDDM_CONFIG="/etc/sddm.conf.d/autologin.conf"
+    log "Found SDDM config at $SDDM_CONFIG"
+
+    cat <<EOF > "$SDDM_CONFIG"
+[Autologin]
+User=$UM_HTPC_USER
+EOF
+
+    return 0
+}
+
+
+
+function enable_autologin() {
+    local display_manager="$(get_display_manager)"
+    log "Enabling autologin for user $UM_HTPC_USER"
+    log "Detected display manager: $display_manager"
+    if [ "$display_manager" = "gdm" ]; then
+        enable_autologin_gdm
+    elif [ "$display_manager" = "lightdm" ]; then
+        enable_autologin_lightdm
+    elif [ "$display_manager" = "sddm" ]; then
+        enable_autologin_sddm
+    else
+        log "Unsupported display manager: $(get_display_manager)"
+    fi
+}
+
+STEAM_SESSION="gamescope-session-steam"
+
+# the sysconfig file should have two envars:
+# - UM_HTPC_USER=<username>
+# - UM_HTPC_DESKTOP=<desktop> # gnome or whatever is in /usr/share/[x/wayland-]sessions
+
+# default arguments for both I guess?
+: ${UM_HTPC_USER:="ultramarine"}
+: ${UM_HTPC_DESKTOP:="gnome"}
+
+SYSCONFIG="/etc/sysconfig/um-htpc"
+
+if [ -f "$SYSCONFIG" ]; then
+    . "$SYSCONFIG"
+fi
+
+
+account_info="/var/lib/AccountsService/users/$UM_HTPC_USER"
+
+
+
+function set_session() {
+    local session="${1}"
+    [ -n "$session" ] || return 255
+
+
+    if [ ! -f "$account_info" ]; then
+        log "Account file not found: $account_info" >&2
+        return 1
+    fi
+    log "Setting last session for user $UM_HTPC_USER to $session"
+
+    # escape characters that would break the sed replacement
+    local esc_session
+    esc_session="$(printf '%s' "$session" | sed 's/[&\/|]/\\&/g')"
+
+    # Overwrite any existing Session= line. We assume the account file is valid and
+    # therefore don't append a new line if it doesn't exist.
+    sed -i "s|^Session=.*|Session=$esc_session|" "$account_info"
+
+    # also set XSession if exists
+    if grep -q '^XSession=' "$account_info"; then
+        sed -i "s|^XSession=.*|XSession=$esc_session|" "$account_info"
+    fi
+
+    log "Set session for user $UM_HTPC_USER to $session in $account_info"
+    return 0
+}
+
+function get_session() {
+    if [ ! -f "$account_info" ]; then
+        log "Account file not found: $account_info" >&2
+        return 1
+    fi
+
+    local session
+    session="$(grep '^Session=' "$account_info" | cut -d= -f2)"
+
+    if [ -z "$session" ]; then
+        echo "No session set for user $UM_HTPC_USER" >&2
+        return 1
+    fi
+
+    echo "$session"
+    return 0
+}
+
+
+function determine_session_from_args() {
+    local arg="$1"
+
+    # No argument or explicit gamescope -> use STEAM_SESSION
+    if [ -z "$arg" ] || [ "$arg" = "gamescope" ]; then
+        printf '%s' "$STEAM_SESSION"
+        return 0
+    fi
+
+    # Use configured desktop when requested
+    if [ "$arg" = "desktop" ] || [ "$arg" = "plasma" ]; then
+        printf '%s' "$UM_HTPC_DESKTOP"
+        return 0
+    fi
+
+    # Any other value is treated as the session name directly
+    printf '%s' "$arg"
+    return 0
+}
+
+# Determine target session and apply it
+target_session="$(determine_session_from_args "$SESSION_ARG")"
+log "Target session: $target_session"
+if [ -z "$target_session" ]; then
+    log "No target session determined"
+    exit 1
+fi
+
+run_as_root_background() {
+    if command -v pkexec >/dev/null 2>&1; then
+    pkexec "$(realpath "$0")" "${ORIG_ARGS[@]}"
+        return 0
+    fi
+    return 1
+}
+
+
+# If we're the unprivileged caller, spawn the privileged helper then shut down Steam here.
+if [ "$EUID" -eq 0 ]; then
+    log "Running as root"
+    log "ENABLE_AUTOLOGIN=$ENABLE_AUTOLOGIN"
+
+    set_session "$target_session"
+
+
+    if [ "${ENABLE_AUTOLOGIN:-}" = true ]; then
+        enable_autologin || log "enable_autologin failed"
+    fi
+    exit $?
+else
+    run_as_root_background || log "Privileged helper failed"
+    # Optionally shut down Steam (unprivileged caller); uncomment if desired:
+    if pgrep -x steam; then
+        steam -shutdown &
+    else
+        log "Steam is not running."
+    fi
+    exec loginctl terminate-session $(loginctl list-sessions | awk -v u="$LOGUSER" '$3==u{print $1}')
+    exit 0
+fi
