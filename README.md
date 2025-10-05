@@ -1,6 +1,12 @@
-# Ultramarine HTPC scripts
+# Ultramarine HTPC Pack
 
-This repository contains HTPC mode scripts for Ultramarine, inspired by Bazzite.
+The Ultramarine HTPC pack is an additional addon to a standard Ultramarine Linux installation.
+
+HTPC mode transforms Ultramarine into a living room or handheld-friendly experience, allowing the user to switch
+to a ten-foot compatible graphical shell like _Steam Big Picture_, allowing the system
+to be easily used on a Home Theater PC or a handheld Ultra-Mobile PC.
+
+## What makes this different from Bazzite?
 
 The key difference from Bazzite is that the system is user-managed
 and an addon to a standard Ultramarine installation, meaning we need to account
@@ -12,9 +18,18 @@ not limited to:
 - Desktop Environments
 - System mutability
 
-This script handles some of this for a Fedora-based system.
+If you would like a fully-managed OTA-like experience, please consider using Bazzite instead.
 
-## Installation
+## Manual Installation
+
+> [!NOTE]
+> Unless you're hacking on these scripts, the best way to install this is through the Ultramarine tweak option
+>
+> This will install the metapackage and set up the environment for you.
+>
+> ```bash
+> um tweaks enable ultramarine-htpc
+> ```
 
 Run `make install` to copy the scripts to the appropriate directories, then use
 `alternatives` to symlink them to the appropriate locations:
