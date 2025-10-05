@@ -1,0 +1,50 @@
+#!/bin/bash
+
+# The Steam client is known to call this script with the following parameter combinations:
+# steamos-update --supports-duplicate-detection     -- should do nothing
+# steamos-update --enable-duplicate-detection check -- should check for update
+# steamos-update check                              -- should check for update
+# steamos-update --enable-duplicate-detection       -- should perform an update
+# steamos-update                                    -- should perform an update
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    check)
+      CHECK=1
+      shift
+      ;;
+    --supports-duplicate-detection)
+      EXIT=1
+      shift
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+
+
+# todo: Consider using custom dnf5daemon client
+
+function get_os_version() {
+    source /etc/os-release
+    echo "$NAME $VERSION_ID"
+}
+
+if [ -n "$CHECK" ]; then
+  dnf5 check-upgrade -y
+  exitcode=$?
+  echo $exitcode
+  get_os_version
+  # DNF5 will exit with code 100 if updates are available and list them; 0 if no updates are available.
+  if [ $exitcode -eq 100 ]; then
+    exit 0
+  elif [ $exitcode -eq 0 ]; then
+    echo "No updates available"
+    exit 7
+  fi
+fi
+
+dnf offline-upgrade download -y
+# Mark next boot as upgrade without actually rebooting
+DNF_SYSTEM_UPGRADE_NO_REBOOT=1 dnf offline reboot -y

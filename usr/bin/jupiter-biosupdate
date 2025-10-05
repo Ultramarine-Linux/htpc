@@ -1,0 +1,5 @@
+#!/usr/bin/bash
+
+# todo: Consider using fwupd for this :3
+
+exit 0;
